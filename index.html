@@ -3,192 +3,239 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Classic Snake Game</title>
+  <title>Number Guessing Game</title>
   <style>
     body {
       display: flex;
-      flex-direction: column;
-      align-items: center;
       justify-content: center;
+      align-items: center;
       min-height: 100vh;
       margin: 0;
-      background-color: #2c3e50;
-      color: #ecf0f1;
+      background-color: #1e272e;
+      color: #d2dae2;
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     }
 
+    .game-card {
+      background-color: #2c3e50;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      text-align: center;
+      max-width: 400px;
+      width: 90%;
+      border: 2px solid #485460;
+    }
+
     h1 {
-      margin: 0 0 10px 0;
-      text-transform: uppercase;
-      letter-spacing: 2px;
+      margin-top: 0;
+      color: #00d8d6;
+      letter-spacing: 1px;
     }
 
-    #score-board {
-      font-size: 24px;
-      margin-bottom: 20px;
-      font-weight: bold;
+    p {
+      font-size: 15px;
+      line-height: 1.5;
     }
 
-    canvas {
-      background-color: #34495e;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-      border: 4px solid #bdc3c7;
+    .input-group {
+      margin: 20px 0;
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    input[type="number"] {
+      width: 100px;
+      padding: 10px;
+      font-size: 18px;
+      border: none;
       border-radius: 5px;
+      text-align: center;
+      outline: none;
     }
 
-    .instructions {
-      margin-top: 20px;
-      font-size: 14px;
-      color: #bdc3c7;
+    /* Remove spinner arrows from number input */
+    input[type=number]::-webkit-inner-spin-button, 
+    input[type=number]::-webkit-outer-spin-button { 
+      -webkit-appearance: none; 
+      margin: 0; 
     }
+
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      font-weight: bold;
+      background-color: #0be881;
+      color: #1e272e;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.2s, transform 0.1s;
+    }
+
+    button:hover {
+      background-color: #05c46b;
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    #resetBtn {
+      background-color: #ffdd59;
+      display: none;
+      margin: 15px auto 0 auto;
+    }
+
+    #resetBtn:hover {
+      background-color: #ffd32a;
+    }
+
+    .message {
+      font-size: 18px;
+      font-weight: bold;
+      min-height: 25px;
+      margin: 15px 0;
+    }
+
+    .stats {
+      background-color: #34495e;
+      padding: 15px;
+      border-radius: 5px;
+      font-size: 14px;
+      text-align: left;
+    }
+
+    .stats p {
+      margin: 5px 0;
+    }
+
+    .high { color: #ff5e57; }
+    .low { color: #00d8d6; }
+    .win { color: #0be881; }
   </style>
 </head>
 <body>
 
-  <h1>Snake</h1>
-  <div id="score-board">Score: <span id="score">0</span></div>
-  
-  <!-- The game grid is 400x400. With a 20px grid, that's 20x20 squares -->
-  <canvas id="gameCanvas" width="400" height="400"></canvas>
+  <div class="game-card">
+    <h1>Guess the Number</h1>
+    <p>I'm thinking of a secret number between <strong>1 and 100</strong>. Can you guess it in 10 attempts or less?</p>
 
-  <div class="instructions">Use <strong>Arrow Keys</strong> to move.</div>
+    <div class="input-group">
+      <input type="number" id="guessInput" min="1" max="100" placeholder="1-100" autofocus>
+      <button id="guessBtn">Guess</button>
+    </div>
+
+    <div id="message" class="message"></div>
+
+    <div class="stats">
+      <p><strong>Attempts Left:</strong> <span id="attempts">10</span></p>
+      <p><strong>Previous Guesses:</strong> <span id="history">None</span></p>
+    </div>
+
+    <button id="resetBtn">Play Again</button>
+  </div>
 
   <script>
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
-    const scoreElement = document.getElementById('score');
+    // Game variables
+    let randomNumber;
+    let attemptsLeft;
+    let guessHistory;
 
-    // Game grid size and initial frame rate controller
-    const gridSize = 20;
-    let count = 0;
-    let score = 0;
+    // DOM Elements
+    const guessInput = document.getElementById('guessInput');
+    const guessBtn = document.getElementById('guessBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const message = document.getElementById('message');
+    const attemptsDisplay = document.getElementById('attempts');
+    const historyDisplay = document.getElementById('history');
 
-    // Snake object definition
-    let snake = {
-      x: 160,
-      y: 160,
-      dx: gridSize, // moves one grid right initially
-      dy: 0,
-      cells: [], // Tracks the segments of the snake body
-      maxCells: 4 // Starting length
-    };
+    // Initialize/Reset the game
+    function initGame() {
+      randomNumber = Math.floor(Math.random() * 100) + 1;
+      attemptsLeft = 10;
+      guessHistory = [];
 
-    // Apple object definition
-    let apple = {
-      x: 320,
-      y: 320
-    };
+      guessInput.disabled = false;
+      guessInput.value = '';
+      guessBtn.disabled = false;
+      resetBtn.style.display = 'none';
 
-    // Helper function to get random integer within a range
-    function getRandomInt(min, max) {
-      return Math.floor(Math.random() * (max - min)) + min;
+      message.innerText = '';
+      message.className = 'message';
+      attemptsDisplay.innerText = attemptsLeft;
+      historyDisplay.innerText = 'None';
+      
+      guessInput.focus();
     }
 
-    // Reset game state when you hit a wall or yourself
-    function resetGame() {
-      snake.x = 160;
-      snake.y = 160;
-      snake.cells = [];
-      snake.maxCells = 4;
-      snake.dx = gridSize;
-      snake.dy = 0;
-      score = 0;
-      scoreElement.innerText = score;
-      placeApple();
-    }
+    // Handle a guess submission
+    function checkGuess() {
+      const userGuess = parseInt(guessInput.value);
 
-    // Move the apple to a random grid position
-    function placeApple() {
-      apple.x = getRandomInt(0, canvas.width / gridSize) * gridSize;
-      apple.y = getRandomInt(0, canvas.height / gridSize) * gridSize;
-    }
-
-    // Main game loop
-    function loop() {
-      requestAnimationFrame(loop);
-
-      // Throttle frame rate to roughly 10-15 fps for classic snake speed
-      if (++count < 6) {
+      // Validate input
+      if (isNaN(userGuess) || userGuess < 1 || userGuess > 100) {
+        message.innerText = 'Please enter a valid number between 1 and 100!';
+        message.className = 'message high';
         return;
       }
-      count = 0;
 
-      // Clear the canvas for the next frame
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // Move snake by its velocity
-      snake.x += snake.dx;
-      snake.y += snake.dy;
-
-      // Collision Detection: Walls
-      // If the snake hits the edge of the screen, reset the game
-      if (snake.x < 0 || snake.x >= canvas.width || snake.y < 0 || snake.y >= canvas.height) {
-        resetGame();
+      // Prevent guessing the exact same number twice
+      if (guessHistory.includes(userGuess)) {
+        message.innerText = 'You already guessed that number!';
+        message.className = 'message';
+        return;
       }
 
-      // Keep track of where the snake has been (front of the array is the head)
-      snake.cells.unshift({x: snake.x, y: snake.y});
+      // Update state
+      guessHistory.push(userGuess);
+      attemptsLeft--;
+      attemptsDisplay.innerText = attemptsLeft;
+      historyDisplay.innerText = guessHistory.join(', ');
 
-      // Remove the tail if we haven't eaten an apple
-      if (snake.cells.length > snake.maxCells) {
-        snake.cells.pop();
+      // Check win/lose conditions
+      if (userGuess === randomNumber) {
+        message.innerText = `🎉 Correct! The number was ${randomNumber}.`;
+        message.className = 'message win';
+        endGame();
+      } else if (attemptsLeft === 0) {
+        message.innerText = `💥 Game Over! The secret number was ${randomNumber}.`;
+        message.className = 'message high';
+        endGame();
+      } else if (userGuess > randomNumber) {
+        message.innerText = '📉 Too High! Try a lower number.';
+        message.className = 'message high';
+      } else {
+        message.innerText = '📈 Too Low! Try a higher number.';
+        message.className = 'message low';
       }
 
-      // Draw the apple
-      ctx.fillStyle = '#e74c3c'; // Red
-      ctx.fillRect(apple.x, apple.y, gridSize - 1, gridSize - 1);
-
-      // Draw the snake
-      ctx.fillStyle = '#2ecc71'; // Green
-      snake.cells.forEach(function(cell, index) {
-        // Draw each segment slightly smaller than the grid size to show gaps
-        ctx.fillRect(cell.x, cell.y, gridSize - 1, gridSize - 1);
-
-        // Check if the snake ate the apple
-        if (cell.x === apple.x && cell.y === apple.y) {
-          snake.maxCells++;
-          score += 10;
-          scoreElement.innerText = score;
-          placeApple();
-        }
-
-        // Collision Detection: Self
-        // Check if the current head (index 0) has collided with any other body part
-        for (let i = index + 1; i < snake.cells.length; i++) {
-          if (cell.x === snake.cells[i].x && cell.y === snake.cells[i].y) {
-            resetGame();
-          }
-        }
-      });
+      guessInput.value = '';
+      guessInput.focus();
     }
 
-    // Keyboard event listener to change direction
-    document.addEventListener('keydown', function(e) {
-      // Prevent the snake from reversing directly into itself
-      // Left arrow
-      if (e.key === 'ArrowLeft' && snake.dx === 0) {
-        snake.dx = -gridSize;
-        snake.dy = 0;
-      }
-      // Up arrow
-      else if (e.key === 'ArrowUp' && snake.dy === 0) {
-        snake.dy = -gridSize;
-        snake.dx = 0;
-      }
-      // Right arrow
-      else if (e.key === 'ArrowRight' && snake.dx === 0) {
-        snake.dx = gridSize;
-        snake.dy = 0;
-      }
-      // Down arrow
-      else if (e.key === 'ArrowDown' && snake.dy === 0) {
-        snake.dy = gridSize;
-        snake.dx = 0;
+    // Lock controls when game ends
+    function endGame() {
+      guessInput.disabled = true;
+      guessBtn.disabled = true;
+      resetBtn.style.display = 'block';
+    }
+
+    // Event Listeners
+    guessBtn.addEventListener('click', checkGuess);
+
+    // Allow pressing "Enter" in the input field to submit
+    guessInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !guessBtn.disabled) {
+        checkGuess();
       }
     });
 
-    // Start the game loop
-    requestAnimationFrame(loop);
+    resetBtn.addEventListener('click', initGame);
+
+    // Start the game on page load
+    initGame();
   </script>
 </body>
 </html>
