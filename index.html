@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HTML5 Raycaster (Doom-lite)</title>
+    <title>HTML5 Raycaster - With Enemies</title>
     <style>
         body {
             margin: 0;
@@ -15,7 +15,6 @@
             overflow: hidden;
             font-family: monospace;
         }
-        /* Forces the canvas to scale up and look pixelated like a 90s DOS game */
         canvas {
             width: 100vw;
             height: 100vh;
@@ -26,10 +25,11 @@
             position: absolute;
             top: 10px;
             left: 10px;
-            color: #ff3333;
+            color: #ffaa00;
             font-size: 20px;
             font-weight: bold;
             pointer-events: none;
+            text-shadow: 2px 2px #000;
         }
     </style>
 </head>
@@ -40,20 +40,23 @@
 
 <script>
 const canvas = document.getElementById('screen');
-const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency
+const ctx = canvas.getContext('2d', { alpha: false });
 
 const SCREEN_W = canvas.width;
 const SCREEN_H = canvas.height;
 const FOV = Math.PI / 3.0; // 60 degrees
 const MAX_DEPTH = 16.0;
 
-// 16x16 2D Map (1 = Wall, 0 = Empty)
+// Z-Buffer to handle depth (hiding enemies behind walls)
+const zBuffer = new Float32Array(SCREEN_W);
+
+// 16x16 Map
 const mapWidth = 16;
 const mapHeight = 16;
 const map = [
     1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
     1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
-    1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
+    1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,
     1,0,0,1,1,0,1,0,0,1,0,1,1,1,0,1,
     1,0,0,1,0,0,0,0,0,1,0,0,0,1,0,1,
     1,0,0,1,0,0,0,0,0,1,1,1,0,1,0,1,
@@ -70,36 +73,69 @@ const map = [
 ];
 
 const player = {
-    x: 2.5,
-    y: 2.5,
-    dir: 0, // Viewing angle
+    x: 2.5, y: 2.5,
+    dir: 0,
     moveSpeed: 0.05,
     rotSpeed: 0.04
 };
+
+// Enemy Data
+const enemies = [
+    { x: 8.5, y: 4.5, alive: true },
+    { x: 13.5, y: 2.5, alive: true },
+    { x: 2.5, y: 13.5, alive: true },
+    { x: 10.5, y: 13.5, alive: true },
+    { x: 8.5, y: 9.5, alive: true }
+];
 
 const keys = { w: false, a: false, s: false, d: false, ArrowLeft: false, ArrowRight: false };
 let isShooting = false;
 let gunRecoil = 0;
 
-// Input handling
 window.addEventListener('keydown', (e) => {
     if (keys.hasOwnProperty(e.key)) keys[e.key] = true;
+    
+    // Shooting mechanics
     if (e.code === 'Space' && !isShooting) {
         isShooting = true;
         gunRecoil = 10;
+        
+        // Check for hit
+        for (let enemy of enemies) {
+            if (!enemy.alive) continue;
+            
+            let dx = enemy.x - player.x;
+            let dy = enemy.y - player.y;
+            let dist = Math.sqrt(dx * dx + dy * dy);
+            
+            let angleToEnemy = Math.atan2(dy, dx);
+            let angleDiff = angleToEnemy - player.dir;
+            
+            // Normalize angle between -PI and PI
+            while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+            while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+            
+            // If enemy is in the center crosshair (+/- 0.1 radians)
+            if (Math.abs(angleDiff) < 0.1) {
+                // Check if a wall is blocking the shot
+                if (dist < zBuffer[Math.floor(SCREEN_W / 2)]) {
+                    enemy.alive = false; // Kill enemy!
+                }
+            }
+        }
+        
         setTimeout(() => isShooting = false, 100);
     }
 });
+
 window.addEventListener('keyup', (e) => {
     if (keys.hasOwnProperty(e.key)) keys[e.key] = false;
 });
 
 function movePlayer() {
-    // Rotation
     if (keys.a || keys.ArrowLeft) player.dir -= player.rotSpeed;
     if (keys.d || keys.ArrowRight) player.dir += player.rotSpeed;
 
-    // Calculate forward movement vectors
     let dx = Math.cos(player.dir) * player.moveSpeed;
     let dy = Math.sin(player.dir) * player.moveSpeed;
 
@@ -114,15 +150,14 @@ function movePlayer() {
 }
 
 function render() {
-    // 1. Draw Ceiling and Floor (Performance trick: draw two massive rectangles)
-    ctx.fillStyle = '#383838'; // Ceiling color
+    // 1. Draw Ceiling and Floor
+    ctx.fillStyle = '#383838';
     ctx.fillRect(0, 0, SCREEN_W, SCREEN_H / 2);
-    ctx.fillStyle = '#555555'; // Floor color
+    ctx.fillStyle = '#555555';
     ctx.fillRect(0, SCREEN_H / 2, SCREEN_W, SCREEN_H / 2);
 
-    // 2. Raycasting Engine (Math heavy)
+    // 2. Raycasting (Walls)
     for (let x = 0; x < SCREEN_W; x++) {
-        // Calculate ray angle for current pixel column
         let rayAngle = (player.dir - FOV / 2.0) + (x / SCREEN_W) * FOV;
         let eyeX = Math.cos(rayAngle);
         let eyeY = Math.sin(rayAngle);
@@ -130,70 +165,111 @@ function render() {
         let distanceToWall = 0;
         let hitWall = false;
         
-        // Ray marching (casting the ray out in small steps)
         while (!hitWall && distanceToWall < MAX_DEPTH) {
             distanceToWall += 0.05;
             let testX = Math.floor(player.x + eyeX * distanceToWall);
             let testY = Math.floor(player.y + eyeY * distanceToWall);
             
-            // Check out of bounds
             if (testX < 0 || testX >= mapWidth || testY < 0 || testY >= mapHeight) {
                 hitWall = true;
                 distanceToWall = MAX_DEPTH;
-            } else {
-                // Ray hit a map block
-                if (map[testY * mapWidth + testX] === 1) {
-                    hitWall = true;
-                }
+            } else if (map[testY * mapWidth + testX] === 1) {
+                hitWall = true;
             }
         }
 
-        // Fix the "fisheye" lens effect
+        // Save distance to Z-Buffer for sprite occlusion
+        zBuffer[x] = distanceToWall;
+
         let correctedDistance = distanceToWall * Math.cos(rayAngle - player.dir);
-        
-        // Calculate wall height based on distance
         let ceiling = (SCREEN_H / 2.0) - SCREEN_H / correctedDistance;
         let floor = SCREEN_H - ceiling;
         let wallHeight = floor - ceiling;
 
-        // Shade the wall darker the further away it is
         let shade = Math.max(0, 255 - (distanceToWall * 20));
         ctx.fillStyle = `rgb(${shade}, ${shade/1.5}, ${shade/1.5})`; 
-        
-        // Draw the vertical 1-pixel wide line for this column
         ctx.fillRect(x, ceiling, 1, wallHeight);
     }
 
-    // 3. Draw Gun Over the 3D View
+    // 3. Render Enemies (Sprites)
+    // First, sort enemies from furthest to closest so they draw in the correct order
+    enemies.forEach(e => {
+        let dx = e.x - player.x;
+        let dy = e.y - player.y;
+        e.dist = Math.sqrt(dx * dx + dy * dy);
+    });
+    enemies.sort((a, b) => b.dist - a.dist);
+
+    for (let enemy of enemies) {
+        if (!enemy.alive) continue;
+
+        let dx = enemy.x - player.x;
+        let dy = enemy.y - player.y;
+        
+        let angleToEnemy = Math.atan2(dy, dx);
+        let angleDiff = angleToEnemy - player.dir;
+        
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+        // If the enemy is in front of the camera
+        if (Math.abs(angleDiff) < FOV) {
+            let screenX = (0.5 * (angleDiff / (FOV / 2.0)) + 0.5) * SCREEN_W;
+            let spriteHeight = Math.abs(SCREEN_H / enemy.dist);
+            let spriteWidth = spriteHeight; // Square sprite
+            let spriteTop = (SCREEN_H - spriteHeight) / 2;
+            
+            let startX = Math.floor(screenX - spriteWidth / 2);
+            let endX = Math.floor(screenX + spriteWidth / 2);
+            
+            // Draw the sprite pixel column by column
+            for (let i = startX; i < endX; i++) {
+                // Only draw the column if it's on screen AND closer than the wall at this pixel
+                if (i >= 0 && i < SCREEN_W && enemy.dist < zBuffer[i]) {
+                    ctx.fillStyle = '#ff2222'; // Red demon body
+                    ctx.fillRect(i, spriteTop, 1, spriteHeight);
+                    
+                    // Add a simple green "eye" to make it look like a monster
+                    if (i > startX + spriteWidth * 0.3 && i < startX + spriteWidth * 0.7) {
+                        ctx.fillStyle = '#00ff00';
+                        ctx.fillRect(i, spriteTop + spriteHeight * 0.2, 1, spriteHeight * 0.15);
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Draw Gun
     if (gunRecoil > 0) gunRecoil -= 1;
     
-    // Gun barrel
     ctx.fillStyle = '#111';
     ctx.fillRect(SCREEN_W / 2 - 10, SCREEN_H - 60 + gunRecoil * 2, 20, 60);
-    ctx.fillStyle = '#333'; // Highlight
+    ctx.fillStyle = '#333';
     ctx.fillRect(SCREEN_W / 2 - 8, SCREEN_H - 60 + gunRecoil * 2, 6, 60);
 
-    // Muzzle flash when shooting
+    // Crosshair
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.fillRect(SCREEN_W / 2 - 1, SCREEN_H / 2 - 4, 2, 8);
+    ctx.fillRect(SCREEN_W / 2 - 4, SCREEN_H / 2 - 1, 8, 2);
+
     if (isShooting) {
-        ctx.fillStyle = '#ffff00'; // Yellow flash
+        ctx.fillStyle = '#ffff00';
         ctx.beginPath();
         ctx.arc(SCREEN_W / 2, SCREEN_H - 65, 15 + Math.random() * 10, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = '#ff0000'; // Red inner flash
+        ctx.fillStyle = '#ff0000';
         ctx.beginPath();
         ctx.arc(SCREEN_W / 2, SCREEN_H - 65, 8 + Math.random() * 5, 0, Math.PI * 2);
         ctx.fill();
     }
 }
 
-// Game Loop
 function gameLoop() {
     movePlayer();
     render();
     requestAnimationFrame(gameLoop);
 }
 
-// Start the engine
 gameLoop();
 
 </script>
