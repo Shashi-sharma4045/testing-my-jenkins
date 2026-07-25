@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HTML5 Raycaster - With Enemies</title>
+    <title>HTML5 Raycaster - Advanced Graphics</title>
     <style>
         body {
             margin: 0;
@@ -13,7 +13,7 @@
             align-items: center;
             height: 100vh;
             overflow: hidden;
-            font-family: monospace;
+            font-family: 'Courier New', Courier, monospace;
         }
         canvas {
             width: 100vw;
@@ -23,19 +23,36 @@
         }
         #ui {
             position: absolute;
-            top: 10px;
-            left: 10px;
-            color: #ffaa00;
-            font-size: 20px;
+            top: 15px;
+            left: 20px;
+            color: #ff3333;
+            font-size: 22px;
             font-weight: bold;
             pointer-events: none;
-            text-shadow: 2px 2px #000;
+            text-shadow: 2px 2px 0px #000;
         }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(255,255,255,0.6);
+        }
+        #crosshair::before { top: 4px; left: 0; width: 10px; height: 2px; }
+        #crosshair::after { top: 0; left: 4px; width: 2px; height: 10px; }
     </style>
 </head>
 <body>
 
-    <div id="ui">WASD to Move | Left/Right to Turn | SPACE to Shoot</div>
+    <div id="ui">WASD: Move | LEFT/RIGHT: Turn | SPACE: Fire Shotgun</div>
+    <div id="crosshair"></div>
     <canvas id="screen" width="320" height="200"></canvas>
 
 <script>
@@ -44,13 +61,64 @@ const ctx = canvas.getContext('2d', { alpha: false });
 
 const SCREEN_W = canvas.width;
 const SCREEN_H = canvas.height;
-const FOV = Math.PI / 3.0; // 60 degrees
-const MAX_DEPTH = 16.0;
+const TEX_SIZE = 64;
+const FOV = Math.PI / 3.0; 
 
-// Z-Buffer to handle depth (hiding enemies behind walls)
+// --- PROCEDURAL TEXTURE GENERATION ---
+// 1. Wall Texture (Bricks)
+const wallCanvas = document.createElement('canvas');
+wallCanvas.width = TEX_SIZE; wallCanvas.height = TEX_SIZE;
+const wCtx = wallCanvas.getContext('2d');
+wCtx.fillStyle = '#5a2222'; wCtx.fillRect(0,0,TEX_SIZE,TEX_SIZE); // Base red
+wCtx.fillStyle = '#220000'; // Mortar lines
+for(let y=0; y<TEX_SIZE; y+=16) {
+    wCtx.fillRect(0, y, TEX_SIZE, 2);
+    let offset = (y/16)%2 === 0 ? 0 : 16;
+    for(let x=0; x<TEX_SIZE; x+=32) wCtx.fillRect(x + offset, y, 2, 16);
+}
+// Add noise/grit to walls
+for(let i=0; i<400; i++) {
+    wCtx.fillStyle = Math.random() > 0.5 ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.1)';
+    wCtx.fillRect(Math.random()*TEX_SIZE, Math.random()*TEX_SIZE, 2, 2);
+}
+
+// 2. Enemy Sprite (Pixel Art Array)
+const spriteCanvas = document.createElement('canvas');
+spriteCanvas.width = 16; spriteCanvas.height = 16;
+const sCtx = spriteCanvas.getContext('2d');
+const spriteArt = [
+    "......XXXX......",
+    "....XXRRRRXX....",
+    "...XRRRRRRRRX...",
+    "..XRRWWWWWWWWX..",
+    ".XRRW000WW000WX.",
+    ".XRRW0X0WW0X0WX.",
+    "XRRRWWWWWWWWWWRX",
+    "XRRRRRRRRRRRRRRX",
+    "XRRRRXXRRXXRRRRX",
+    "XRRRXYYYRRYYYRRX",
+    ".XRRXYYXXXXYYRX.",
+    ".XRRRXXXXXXXXRX.",
+    "..XRRRRRRRRRRX..",
+    "...XXRRRRRRXX...",
+    ".....XXXXXX.....",
+    "......X..X......"
+];
+const colors = {'X': '#111', 'R': '#d02020', 'W': '#eaeaea', '0': '#000', 'Y': '#d0a020', '.': null};
+for(let y=0; y<16; y++) {
+    for(let x=0; x<16; x++) {
+        let char = spriteArt[y][x];
+        if (colors[char]) {
+            sCtx.fillStyle = colors[char];
+            sCtx.fillRect(x, y, 1, 1);
+        }
+    }
+}
+
+// --- GAME STATE ---
 const zBuffer = new Float32Array(SCREEN_W);
 
-// 16x16 Map
+// 1 = Wall, 0 = Empty
 const mapWidth = 16;
 const mapHeight = 16;
 const map = [
@@ -72,14 +140,7 @@ const map = [
     1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
 ];
 
-const player = {
-    x: 2.5, y: 2.5,
-    dir: 0,
-    moveSpeed: 0.05,
-    rotSpeed: 0.04
-};
-
-// Enemy Data
+const player = { x: 2.5, y: 2.5, dir: 0, moveSpeed: 0.05, rotSpeed: 0.04 };
 const enemies = [
     { x: 8.5, y: 4.5, alive: true },
     { x: 13.5, y: 2.5, alive: true },
@@ -92,45 +153,31 @@ const keys = { w: false, a: false, s: false, d: false, ArrowLeft: false, ArrowRi
 let isShooting = false;
 let gunRecoil = 0;
 
+// --- INPUT ---
 window.addEventListener('keydown', (e) => {
     if (keys.hasOwnProperty(e.key)) keys[e.key] = true;
-    
-    // Shooting mechanics
-    if (e.code === 'Space' && !isShooting) {
+    if (e.code === 'Space' && !isShooting && gunRecoil === 0) {
         isShooting = true;
-        gunRecoil = 10;
+        gunRecoil = 15;
         
-        // Check for hit
+        // Hitscan detection
         for (let enemy of enemies) {
             if (!enemy.alive) continue;
-            
-            let dx = enemy.x - player.x;
-            let dy = enemy.y - player.y;
+            let dx = enemy.x - player.x, dy = enemy.y - player.y;
             let dist = Math.sqrt(dx * dx + dy * dy);
+            let angleDiff = Math.atan2(dy, dx) - player.dir;
             
-            let angleToEnemy = Math.atan2(dy, dx);
-            let angleDiff = angleToEnemy - player.dir;
-            
-            // Normalize angle between -PI and PI
             while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
             while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
             
-            // If enemy is in the center crosshair (+/- 0.1 radians)
-            if (Math.abs(angleDiff) < 0.1) {
-                // Check if a wall is blocking the shot
-                if (dist < zBuffer[Math.floor(SCREEN_W / 2)]) {
-                    enemy.alive = false; // Kill enemy!
-                }
+            if (Math.abs(angleDiff) < 0.15 && dist < zBuffer[Math.floor(SCREEN_W / 2)]) {
+                enemy.alive = false; // Enemy killed!
             }
         }
-        
         setTimeout(() => isShooting = false, 100);
     }
 });
-
-window.addEventListener('keyup', (e) => {
-    if (keys.hasOwnProperty(e.key)) keys[e.key] = false;
-});
+window.addEventListener('keyup', (e) => { if (keys.hasOwnProperty(e.key)) keys[e.key] = false; });
 
 function movePlayer() {
     if (keys.a || keys.ArrowLeft) player.dir -= player.rotSpeed;
@@ -150,116 +197,134 @@ function movePlayer() {
 }
 
 function render() {
-    // 1. Draw Ceiling and Floor
-    ctx.fillStyle = '#383838';
+    // 1. Draw Gradient Sky and Floor
+    let skyGradient = ctx.createLinearGradient(0, 0, 0, SCREEN_H/2);
+    skyGradient.addColorStop(0, '#1a1a24');
+    skyGradient.addColorStop(1, '#3a3a4c');
+    ctx.fillStyle = skyGradient;
     ctx.fillRect(0, 0, SCREEN_W, SCREEN_H / 2);
-    ctx.fillStyle = '#555555';
+    
+    ctx.fillStyle = '#333333'; // Solid floor
     ctx.fillRect(0, SCREEN_H / 2, SCREEN_W, SCREEN_H / 2);
 
-    // 2. Raycasting (Walls)
+    // 2. DDA Raycasting Engine (Math upgraded for perfect textures)
     for (let x = 0; x < SCREEN_W; x++) {
-        let rayAngle = (player.dir - FOV / 2.0) + (x / SCREEN_W) * FOV;
-        let eyeX = Math.cos(rayAngle);
-        let eyeY = Math.sin(rayAngle);
+        let cameraX = 2 * x / SCREEN_W - 1; 
+        let rayDirX = Math.cos(player.dir) + Math.cos(player.dir + Math.PI/2) * cameraX * 0.66;
+        let rayDirY = Math.sin(player.dir) + Math.sin(player.dir + Math.PI/2) * cameraX * 0.66;
         
-        let distanceToWall = 0;
-        let hitWall = false;
-        
-        while (!hitWall && distanceToWall < MAX_DEPTH) {
-            distanceToWall += 0.05;
-            let testX = Math.floor(player.x + eyeX * distanceToWall);
-            let testY = Math.floor(player.y + eyeY * distanceToWall);
-            
-            if (testX < 0 || testX >= mapWidth || testY < 0 || testY >= mapHeight) {
-                hitWall = true;
-                distanceToWall = MAX_DEPTH;
-            } else if (map[testY * mapWidth + testX] === 1) {
-                hitWall = true;
-            }
+        let mapX = Math.floor(player.x), mapY = Math.floor(player.y);
+        let sideDistX, sideDistY;
+        let deltaDistX = Math.abs(1 / rayDirX), deltaDistY = Math.abs(1 / rayDirY);
+        let stepX, stepY, hit = 0, side;
+
+        if (rayDirX < 0) { stepX = -1; sideDistX = (player.x - mapX) * deltaDistX; }
+        else { stepX = 1; sideDistX = (mapX + 1.0 - player.x) * deltaDistX; }
+        if (rayDirY < 0) { stepY = -1; sideDistY = (player.y - mapY) * deltaDistY; }
+        else { stepY = 1; sideDistY = (mapY + 1.0 - player.y) * deltaDistY; }
+
+        while (hit === 0) {
+            if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; }
+            else { sideDistY += deltaDistY; mapY += stepY; side = 1; }
+            if (map[mapY * mapWidth + mapX] > 0) hit = 1;
         }
 
-        // Save distance to Z-Buffer for sprite occlusion
-        zBuffer[x] = distanceToWall;
+        let perpWallDist = (side === 0) ? (sideDistX - deltaDistX) : (sideDistY - deltaDistY);
+        zBuffer[x] = perpWallDist;
 
-        let correctedDistance = distanceToWall * Math.cos(rayAngle - player.dir);
-        let ceiling = (SCREEN_H / 2.0) - SCREEN_H / correctedDistance;
-        let floor = SCREEN_H - ceiling;
-        let wallHeight = floor - ceiling;
+        let lineHeight = Math.floor(SCREEN_H / perpWallDist);
+        let drawStart = -lineHeight / 2 + SCREEN_H / 2;
+        let drawEnd = lineHeight / 2 + SCREEN_H / 2;
 
-        let shade = Math.max(0, 255 - (distanceToWall * 20));
-        ctx.fillStyle = `rgb(${shade}, ${shade/1.5}, ${shade/1.5})`; 
-        ctx.fillRect(x, ceiling, 1, wallHeight);
+        // Calculate texture coordinate
+        let wallX;
+        if (side === 0) wallX = player.y + perpWallDist * rayDirY;
+        else wallX = player.x + perpWallDist * rayDirX;
+        wallX -= Math.floor(wallX);
+
+        let texX = Math.floor(wallX * TEX_SIZE);
+        if (side === 0 && rayDirX > 0) texX = TEX_SIZE - texX - 1;
+        if (side === 1 && rayDirY < 0) texX = TEX_SIZE - texX - 1;
+
+        // Draw the vertical slice of the wall texture
+        if (drawStart < SCREEN_H && drawEnd > 0) {
+            ctx.drawImage(wallCanvas, texX, 0, 1, TEX_SIZE, x, drawStart, 1, lineHeight);
+        }
+
+        // Apply directional & depth shading
+        let depthShader = Math.min(1, perpWallDist / 12);
+        ctx.fillStyle = `rgba(0, 0, 0, ${depthShader + (side === 1 ? 0.3 : 0)})`; 
+        ctx.fillRect(x, drawStart, 1, lineHeight);
     }
 
-    // 3. Render Enemies (Sprites)
-    // First, sort enemies from furthest to closest so they draw in the correct order
-    enemies.forEach(e => {
-        let dx = e.x - player.x;
-        let dy = e.y - player.y;
-        e.dist = Math.sqrt(dx * dx + dy * dy);
-    });
+    // 3. Render Sprites
+    enemies.forEach(e => { e.dist = Math.sqrt(Math.pow(e.x - player.x, 2) + Math.pow(e.y - player.y, 2)); });
     enemies.sort((a, b) => b.dist - a.dist);
 
     for (let enemy of enemies) {
         if (!enemy.alive) continue;
 
-        let dx = enemy.x - player.x;
-        let dy = enemy.y - player.y;
-        
-        let angleToEnemy = Math.atan2(dy, dx);
-        let angleDiff = angleToEnemy - player.dir;
-        
-        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        let spriteX = enemy.x - player.x;
+        let spriteY = enemy.y - player.y;
 
-        // If the enemy is in front of the camera
-        if (Math.abs(angleDiff) < FOV) {
-            let screenX = (0.5 * (angleDiff / (FOV / 2.0)) + 0.5) * SCREEN_W;
-            let spriteHeight = Math.abs(SCREEN_H / enemy.dist);
-            let spriteWidth = spriteHeight; // Square sprite
-            let spriteTop = (SCREEN_H - spriteHeight) / 2;
-            
-            let startX = Math.floor(screenX - spriteWidth / 2);
-            let endX = Math.floor(screenX + spriteWidth / 2);
-            
-            // Draw the sprite pixel column by column
-            for (let i = startX; i < endX; i++) {
-                // Only draw the column if it's on screen AND closer than the wall at this pixel
-                if (i >= 0 && i < SCREEN_W && enemy.dist < zBuffer[i]) {
-                    ctx.fillStyle = '#ff2222'; // Red demon body
-                    ctx.fillRect(i, spriteTop, 1, spriteHeight);
+        // Transform sprite with the inverse camera matrix
+        let invDet = 1.0 / (Math.cos(player.dir + Math.PI/2)*0.66 * Math.sin(player.dir) - Math.cos(player.dir) * Math.sin(player.dir + Math.PI/2)*0.66);
+        let transformX = invDet * (Math.sin(player.dir) * spriteX - Math.cos(player.dir) * spriteY);
+        let transformY = invDet * (-Math.sin(player.dir + Math.PI/2)*0.66 * spriteX + Math.cos(player.dir + Math.PI/2)*0.66 * spriteY);
+        
+        let spriteScreenX = Math.floor((SCREEN_W / 2) * (1 + transformX / transformY));
+        let spriteHeight = Math.abs(Math.floor(SCREEN_H / transformY));
+        let spriteWidth = Math.abs(Math.floor(SCREEN_H / transformY));
+        
+        let drawStartY = Math.floor(-spriteHeight / 2 + SCREEN_H / 2);
+        let drawStartX = Math.floor(-spriteWidth / 2 + spriteScreenX);
+        let drawEndX = Math.floor(spriteWidth / 2 + spriteScreenX);
+
+        if (transformY > 0) {
+            for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
+                if (stripe > 0 && stripe < SCREEN_W && transformY < zBuffer[stripe]) {
+                    // Calculate which pixel of the 16x16 sprite array to draw
+                    let texX = Math.floor((stripe - drawStartX) * 16 / spriteWidth);
+                    ctx.drawImage(spriteCanvas, texX, 0, 1, 16, stripe, drawStartY, 1, spriteHeight);
                     
-                    // Add a simple green "eye" to make it look like a monster
-                    if (i > startX + spriteWidth * 0.3 && i < startX + spriteWidth * 0.7) {
-                        ctx.fillStyle = '#00ff00';
-                        ctx.fillRect(i, spriteTop + spriteHeight * 0.2, 1, spriteHeight * 0.15);
-                    }
+                    // Depth fog on enemies
+                    ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(0.8, transformY / 12)})`;
+                    ctx.fillRect(stripe, drawStartY, 1, spriteHeight);
                 }
             }
         }
     }
 
-    // 4. Draw Gun
+    // 4. Draw Double-Barrel Shotgun
     if (gunRecoil > 0) gunRecoil -= 1;
+    let sway = Math.sin(Date.now() / 200) * (keys.w || keys.s ? 5 : 0);
+    let gunX = SCREEN_W / 2 - 25 + sway;
+    let gunY = SCREEN_H - 100 + gunRecoil * 2;
+
+    // Barrels
+    ctx.fillStyle = '#2a2a2a'; // Left Barrel
+    ctx.fillRect(gunX, gunY, 20, 100);
+    ctx.fillStyle = '#111'; // Right Barrel
+    ctx.fillRect(gunX + 20, gunY, 20, 100);
     
-    ctx.fillStyle = '#111';
-    ctx.fillRect(SCREEN_W / 2 - 10, SCREEN_H - 60 + gunRecoil * 2, 20, 60);
-    ctx.fillStyle = '#333';
-    ctx.fillRect(SCREEN_W / 2 - 8, SCREEN_H - 60 + gunRecoil * 2, 6, 60);
+    // Metallic Highlights
+    ctx.fillStyle = '#666'; 
+    ctx.fillRect(gunX + 4, gunY, 5, 100);
+    ctx.fillRect(gunX + 24, gunY, 5, 100);
+    
+    // Gun body/stock
+    ctx.fillStyle = '#5c3a21'; // Wood color
+    ctx.fillRect(gunX - 10, gunY + 70, 60, 40);
 
-    // Crosshair
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-    ctx.fillRect(SCREEN_W / 2 - 1, SCREEN_H / 2 - 4, 2, 8);
-    ctx.fillRect(SCREEN_W / 2 - 4, SCREEN_H / 2 - 1, 8, 2);
-
+    // Muzzle Flash
     if (isShooting) {
-        ctx.fillStyle = '#ffff00';
+        ctx.fillStyle = 'rgba(255, 200, 0, 0.8)';
         ctx.beginPath();
-        ctx.arc(SCREEN_W / 2, SCREEN_H - 65, 15 + Math.random() * 10, 0, Math.PI * 2);
+        ctx.arc(SCREEN_W / 2 + sway, gunY - 10, 25, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = '#ff0000';
+        ctx.fillStyle = 'rgba(255, 50, 0, 0.9)';
         ctx.beginPath();
-        ctx.arc(SCREEN_W / 2, SCREEN_H - 65, 8 + Math.random() * 5, 0, Math.PI * 2);
+        ctx.arc(SCREEN_W / 2 + sway, gunY - 10, 15, 0, Math.PI * 2);
         ctx.fill();
     }
 }
@@ -270,6 +335,7 @@ function gameLoop() {
     requestAnimationFrame(gameLoop);
 }
 
+// Start
 gameLoop();
 
 </script>
