@@ -3,430 +3,198 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Abyssal Crawler</title>
+    <title>HTML5 Raycaster (Doom-lite)</title>
     <style>
         body {
             margin: 0;
-            background-color: #0a0a0c;
-            color: #e0e0e0;
-            font-family: 'Courier New', Courier, monospace;
+            background-color: #000;
             display: flex;
-            flex-direction: column;
+            justify-content: center;
             align-items: center;
             height: 100vh;
             overflow: hidden;
+            font-family: monospace;
         }
-        #ui {
-            width: 800px;
-            display: flex;
-            justify-content: space-between;
-            padding: 10px;
-            background: #111;
-            border-bottom: 2px solid #333;
-            font-size: 18px;
-            font-weight: bold;
-        }
+        /* Forces the canvas to scale up and look pixelated like a 90s DOS game */
         canvas {
-            background-color: #000;
-            box-shadow: 0 0 20px rgba(0,0,0,0.8);
-            margin-top: 10px;
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
             image-rendering: pixelated;
         }
-        #log {
-            width: 800px;
-            height: 100px;
-            background: #111;
-            margin-top: 10px;
-            padding: 10px;
-            overflow-y: hidden;
-            border: 1px solid #333;
-            box-sizing: border-box;
-            display: flex;
-            flex-direction: column;
-            justify-content: flex-end;
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #ff3333;
+            font-size: 20px;
+            font-weight: bold;
+            pointer-events: none;
         }
-        .log-entry { margin: 2px 0; color: #aaa; }
-        .log-entry.new { color: #fff; }
-        .log-entry.combat { color: #ff5555; }
-        .log-entry.loot { color: #55ff55; }
     </style>
 </head>
 <body>
 
-    <div id="ui">
-        <span id="hpUI">HP: 20/20</span>
-        <span id="lvlUI">Level: 1</span>
-        <span id="xpUI">XP: 0/10</span>
-        <span id="floorUI">Floor: 1</span>
-    </div>
-    
-    <canvas id="gameCanvas" width="800" height="600"></canvas>
-    
-    <div id="log"></div>
+    <div id="ui">WASD to Move | Left/Right to Turn | SPACE to Shoot</div>
+    <canvas id="screen" width="320" height="200"></canvas>
 
 <script>
-// --- GAME SETTINGS ---
-const TILE_SIZE = 32;
-const COLS = 25;
-const ROWS = 18;
-const MAP_WIDTH = 50; 
-const MAP_HEIGHT = 50;
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency
 
-const ctx = document.getElementById('gameCanvas').getContext('2d');
-ctx.font = '24px Arial';
-ctx.textAlign = 'center';
-ctx.textBaseline = 'middle';
+const SCREEN_W = canvas.width;
+const SCREEN_H = canvas.height;
+const FOV = Math.PI / 3.0; // 60 degrees
+const MAX_DEPTH = 16.0;
 
-// --- GAME STATE ---
-let map = [];
-let entities = [];
-let player;
-let floor = 1;
-let messages = [];
+// 16x16 2D Map (1 = Wall, 0 = Empty)
+const mapWidth = 16;
+const mapHeight = 16;
+const map = [
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
+    1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
+    1,0,0,1,1,0,1,0,0,1,0,1,1,1,0,1,
+    1,0,0,1,0,0,0,0,0,1,0,0,0,1,0,1,
+    1,0,0,1,0,0,0,0,0,1,1,1,0,1,0,1,
+    1,0,0,1,0,1,1,0,0,0,0,0,0,0,0,1,
+    1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
+    1,1,1,1,0,1,1,1,0,0,1,1,1,1,0,1,
+    1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1,
+    1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1,
+    1,0,1,1,1,1,1,0,1,1,1,0,1,1,1,1,
+    1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
+    1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
+    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+];
 
-const TILE = {
-    WALL: '#222',
-    FLOOR: '#111',
-    DOOR: '#422'
+const player = {
+    x: 2.5,
+    y: 2.5,
+    dir: 0, // Viewing angle
+    moveSpeed: 0.05,
+    rotSpeed: 0.04
 };
 
-const ENEMIES = [
-    { icon: '🦇', name: 'Bat', hp: 5, atk: 2, xp: 2 },
-    { icon: '🕷️', name: 'Spider', hp: 8, atk: 3, xp: 4 },
-    { icon: '🧟', name: 'Zombie', hp: 15, atk: 5, xp: 8 },
-    { icon: '🧛', name: 'Vampire', hp: 25, atk: 8, xp: 15 },
-    { icon: '🐉', name: 'Dragon', hp: 50, atk: 15, xp: 50 }
-];
+const keys = { w: false, a: false, s: false, d: false, ArrowLeft: false, ArrowRight: false };
+let isShooting = false;
+let gunRecoil = 0;
 
-const ITEMS = [
-    { icon: '🧪', name: 'Health Potion', type: 'heal', val: 10 },
-    { icon: '🗡️', name: 'Iron Sword', type: 'weapon', val: 2 },
-    { icon: '🛡️', name: 'Shield', type: 'armor', val: 1 }
-];
+// Input handling
+window.addEventListener('keydown', (e) => {
+    if (keys.hasOwnProperty(e.key)) keys[e.key] = true;
+    if (e.code === 'Space' && !isShooting) {
+        isShooting = true;
+        gunRecoil = 10;
+        setTimeout(() => isShooting = false, 100);
+    }
+});
+window.addEventListener('keyup', (e) => {
+    if (keys.hasOwnProperty(e.key)) keys[e.key] = false;
+});
 
-// --- CLASSES ---
-class Entity {
-    constructor(x, y, icon, isPlayer = false) {
-        this.x = x;
-        this.y = y;
-        this.icon = icon;
-        this.isPlayer = isPlayer;
+function movePlayer() {
+    // Rotation
+    if (keys.a || keys.ArrowLeft) player.dir -= player.rotSpeed;
+    if (keys.d || keys.ArrowRight) player.dir += player.rotSpeed;
+
+    // Calculate forward movement vectors
+    let dx = Math.cos(player.dir) * player.moveSpeed;
+    let dy = Math.sin(player.dir) * player.moveSpeed;
+
+    if (keys.w) {
+        if (map[Math.floor(player.y) * mapWidth + Math.floor(player.x + dx * 2)] === 0) player.x += dx;
+        if (map[Math.floor(player.y + dy * 2) * mapWidth + Math.floor(player.x)] === 0) player.y += dy;
+    }
+    if (keys.s) {
+        if (map[Math.floor(player.y) * mapWidth + Math.floor(player.x - dx * 2)] === 0) player.x -= dx;
+        if (map[Math.floor(player.y - dy * 2) * mapWidth + Math.floor(player.x)] === 0) player.y -= dy;
     }
 }
 
-class Player extends Entity {
-    constructor(x, y) {
-        super(x, y, '🧙‍♂️', true);
-        this.maxHp = 20;
-        this.hp = 20;
-        this.atk = 4;
-        this.def = 0;
-        this.level = 1;
-        this.xp = 0;
-        this.xpNeeded = 10;
-    }
-    
-    move(dx, dy) {
-        let nx = this.x + dx;
-        let ny = this.y + dy;
-        
-        // Collision with map
-        if (map[ny][nx] === TILE.WALL) return;
-        
-        // Collision with entities
-        let target = entities.find(e => e.x === nx && e.y === ny);
-        if (target) {
-            if (target.type === 'enemy') {
-                combat(this, target);
-                processTurn();
-                return;
-            } else if (target.type === 'item') {
-                collectItem(target);
-                entities = entities.filter(e => e !== target);
-            } else if (target.type === 'stairs') {
-                nextFloor();
-                return;
-            }
-        }
-        
-        this.x = nx;
-        this.y = ny;
-        processTurn();
-    }
-}
+function render() {
+    // 1. Draw Ceiling and Floor (Performance trick: draw two massive rectangles)
+    ctx.fillStyle = '#383838'; // Ceiling color
+    ctx.fillRect(0, 0, SCREEN_W, SCREEN_H / 2);
+    ctx.fillStyle = '#555555'; // Floor color
+    ctx.fillRect(0, SCREEN_H / 2, SCREEN_W, SCREEN_H / 2);
 
-class Enemy extends Entity {
-    constructor(x, y, levelOffset) {
-        // Pick enemy based on floor level
-        let tier = Math.min(ENEMIES.length - 1, Math.floor((floor + levelOffset) / 3));
-        let template = ENEMIES[Math.max(0, Math.floor(Math.random() * (tier + 1)))];
+    // 2. Raycasting Engine (Math heavy)
+    for (let x = 0; x < SCREEN_W; x++) {
+        // Calculate ray angle for current pixel column
+        let rayAngle = (player.dir - FOV / 2.0) + (x / SCREEN_W) * FOV;
+        let eyeX = Math.cos(rayAngle);
+        let eyeY = Math.sin(rayAngle);
         
-        super(x, y, template.icon);
-        this.type = 'enemy';
-        this.name = template.name;
+        let distanceToWall = 0;
+        let hitWall = false;
         
-        // Scale stats with floor
-        let scale = 1 + (floor * 0.2);
-        this.hp = Math.floor(template.hp * scale);
-        this.atk = Math.floor(template.atk * scale);
-        this.xp = template.xp;
-    }
-    
-    act() {
-        // Simple AI: Move towards player if close
-        let dx = player.x - this.x;
-        let dy = player.y - this.y;
-        let dist = Math.abs(dx) + Math.abs(dy);
-        
-        if (dist === 1) {
-            combat(this, player);
-        } else if (dist < 6) {
-            let stepX = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
-            let stepY = dy > 0 ? 1 : (dy < 0 ? -1 : 0);
+        // Ray marching (casting the ray out in small steps)
+        while (!hitWall && distanceToWall < MAX_DEPTH) {
+            distanceToWall += 0.05;
+            let testX = Math.floor(player.x + eyeX * distanceToWall);
+            let testY = Math.floor(player.y + eyeY * distanceToWall);
             
-            // Try horizontal
-            if (stepX !== 0 && map[this.y][this.x + stepX] === TILE.FLOOR && !getEntityAt(this.x + stepX, this.y)) {
-                this.x += stepX;
-            } 
-            // Try vertical
-            else if (stepY !== 0 && map[this.y + stepY][this.x] === TILE.FLOOR && !getEntityAt(this.x, this.y + stepY)) {
-                this.y += stepY;
-            }
-        }
-    }
-}
-
-// --- SYSTEMS ---
-function getEntityAt(x, y) {
-    if (player.x === x && player.y === y) return player;
-    return entities.find(e => e.x === x && e.y === y);
-}
-
-function logMsg(msg, type = 'new') {
-    messages.push({ text: msg, type: type });
-    if (messages.length > 4) messages.shift();
-    updateUI();
-}
-
-function combat(attacker, defender) {
-    let dmg = Math.max(1, attacker.atk - (defender.def || 0));
-    
-    // Add variance
-    dmg = Math.floor(dmg * (0.8 + Math.random() * 0.4));
-    defender.hp -= dmg;
-    
-    let msgType = attacker.isPlayer ? 'combat' : 'new';
-    logMsg(`${attacker.name || 'You'} hit ${defender.name || 'you'} for ${dmg} dmg.`, msgType);
-    
-    if (defender.hp <= 0) {
-        if (defender.isPlayer) {
-            logMsg("YOU DIED. Refresh to restart.", "combat");
-            document.removeEventListener('keydown', handleInput);
-        } else {
-            logMsg(`Defeated ${defender.name}! Gained ${defender.xp} XP.`, "loot");
-            player.xp += defender.xp;
-            entities = entities.filter(e => e !== defender);
-            checkLevelUp();
-        }
-    }
-}
-
-function checkLevelUp() {
-    if (player.xp >= player.xpNeeded) {
-        player.level++;
-        player.xp -= player.xpNeeded;
-        player.xpNeeded = Math.floor(player.xpNeeded * 1.5);
-        player.maxHp += 5;
-        player.hp = player.maxHp;
-        player.atk += 2;
-        logMsg(`Level Up! You are now level ${player.level}.`, "loot");
-    }
-}
-
-function collectItem(item) {
-    if (item.itemType === 'heal') {
-        player.hp = Math.min(player.maxHp, player.hp + item.val);
-        logMsg(`Drank potion. Restored ${item.val} HP.`, "loot");
-    } else if (item.itemType === 'weapon') {
-        player.atk += item.val;
-        logMsg(`Found ${item.name}! Attack +${item.val}.`, "loot");
-    } else if (item.itemType === 'armor') {
-        player.def += item.val;
-        logMsg(`Found ${item.name}! Defense +${item.val}.`, "loot");
-    }
-}
-
-function processTurn() {
-    entities.forEach(e => {
-        if (e.type === 'enemy') e.act();
-    });
-    updateUI();
-    draw();
-}
-
-// --- MAP GENERATION (BSP/Dungeon Room approach) ---
-function generateMap() {
-    map = Array(MAP_HEIGHT).fill().map(() => Array(MAP_WIDTH).fill(TILE.WALL));
-    entities = [];
-    
-    let rooms = [];
-    const MAX_ROOMS = 15;
-    
-    for (let i = 0; i < MAX_ROOMS; i++) {
-        let w = Math.floor(Math.random() * 6) + 4;
-        let h = Math.floor(Math.random() * 6) + 4;
-        let x = Math.floor(Math.random() * (MAP_WIDTH - w - 2)) + 1;
-        let y = Math.floor(Math.random() * (MAP_HEIGHT - h - 2)) + 1;
-        
-        let newRoom = {x, y, w, h, center: {x: Math.floor(x + w/2), y: Math.floor(y + h/2)}};
-        
-        let failed = false;
-        for (let r of rooms) {
-            if (x < r.x + r.w && x + w > r.x && y < r.y + r.h && y + h > r.y) {
-                failed = true;
-                break;
-            }
-        }
-        
-        if (!failed) {
-            // Dig room
-            for (let ry = y; ry < y + h; ry++) {
-                for (let rx = x; rx < x + w; rx++) {
-                    map[ry][rx] = TILE.FLOOR;
-                }
-            }
-            
-            // Connect to previous room
-            if (rooms.length > 0) {
-                let prev = rooms[rooms.length - 1].center;
-                let curr = newRoom.center;
-                
-                // Draw corridor
-                for (let cx = Math.min(prev.x, curr.x); cx <= Math.max(prev.x, curr.x); cx++) map[prev.y][cx] = TILE.FLOOR;
-                for (let cy = Math.min(prev.y, curr.y); cy <= Math.max(prev.y, curr.y); cy++) map[cy][curr.x] = TILE.FLOOR;
-            }
-            
-            rooms.push(newRoom);
-        }
-    }
-    
-    // Place Player in first room
-    if (!player) player = new Player(rooms[0].center.x, rooms[0].center.y);
-    else {
-        player.x = rooms[0].center.x;
-        player.y = rooms[0].center.y;
-    }
-    
-    // Place Stairs in last room
-    let lastRoom = rooms[rooms.length - 1];
-    let stairs = new Entity(lastRoom.center.x, lastRoom.center.y, '🕳️');
-    stairs.type = 'stairs';
-    entities.push(stairs);
-    
-    // Populate entities in other rooms
-    for (let i = 1; i < rooms.length - 1; i++) {
-        let r = rooms[i];
-        
-        // Spawn Enemies
-        let numEnemies = Math.floor(Math.random() * 3);
-        for (let j=0; j<numEnemies; j++) {
-            let ex = r.x + Math.floor(Math.random() * r.w);
-            let ey = r.y + Math.floor(Math.random() * r.h);
-            if (!getEntityAt(ex, ey)) entities.push(new Enemy(ex, ey, 0));
-        }
-        
-        // Spawn Loot (20% chance per room)
-        if (Math.random() < 0.2) {
-            let ix = r.x + Math.floor(Math.random() * r.w);
-            let iy = r.y + Math.floor(Math.random() * r.h);
-            if (!getEntityAt(ix, iy)) {
-                let template = ITEMS[Math.floor(Math.random() * ITEMS.length)];
-                let item = new Entity(ix, iy, template.icon);
-                item.type = 'item';
-                item.itemType = template.type;
-                item.name = template.name;
-                item.val = template.val;
-                entities.push(item);
-            }
-        }
-    }
-}
-
-function nextFloor() {
-    floor++;
-    logMsg(`Descended to Floor ${floor}. The air grows colder...`, "new");
-    generateMap();
-    draw();
-    updateUI();
-}
-
-// --- RENDERING ---
-function draw() {
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, 800, 600);
-    
-    // Camera logic (center on player)
-    let camX = player.x - Math.floor(COLS / 2);
-    let camY = player.y - Math.floor(ROWS / 2);
-    
-    for (let y = 0; y < ROWS; y++) {
-        for (let x = 0; x < COLS; x++) {
-            let mapX = camX + x;
-            let mapY = camY + y;
-            
-            // Check bounds and field of view (simple distance)
-            let dist = Math.sqrt(Math.pow(player.x - mapX, 2) + Math.pow(player.y - mapY, 2));
-            
-            if (mapX >= 0 && mapX < MAP_WIDTH && mapY >= 0 && mapY < MAP_HEIGHT) {
-                if (dist < 8) {
-                    ctx.fillStyle = map[mapY][mapX];
-                    ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
-                    
-                    // Draw entities
-                    let ent = getEntityAt(mapX, mapY);
-                    if (ent) {
-                        ctx.fillText(ent.icon, x * TILE_SIZE + TILE_SIZE/2, y * TILE_SIZE + TILE_SIZE/2);
-                    }
-                } else if (dist < 12) {
-                    // Fog of war
-                    ctx.fillStyle = '#050505';
-                    ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            // Check out of bounds
+            if (testX < 0 || testX >= mapWidth || testY < 0 || testY >= mapHeight) {
+                hitWall = true;
+                distanceToWall = MAX_DEPTH;
+            } else {
+                // Ray hit a map block
+                if (map[testY * mapWidth + testX] === 1) {
+                    hitWall = true;
                 }
             }
         }
+
+        // Fix the "fisheye" lens effect
+        let correctedDistance = distanceToWall * Math.cos(rayAngle - player.dir);
+        
+        // Calculate wall height based on distance
+        let ceiling = (SCREEN_H / 2.0) - SCREEN_H / correctedDistance;
+        let floor = SCREEN_H - ceiling;
+        let wallHeight = floor - ceiling;
+
+        // Shade the wall darker the further away it is
+        let shade = Math.max(0, 255 - (distanceToWall * 20));
+        ctx.fillStyle = `rgb(${shade}, ${shade/1.5}, ${shade/1.5})`; 
+        
+        // Draw the vertical 1-pixel wide line for this column
+        ctx.fillRect(x, ceiling, 1, wallHeight);
+    }
+
+    // 3. Draw Gun Over the 3D View
+    if (gunRecoil > 0) gunRecoil -= 1;
+    
+    // Gun barrel
+    ctx.fillStyle = '#111';
+    ctx.fillRect(SCREEN_W / 2 - 10, SCREEN_H - 60 + gunRecoil * 2, 20, 60);
+    ctx.fillStyle = '#333'; // Highlight
+    ctx.fillRect(SCREEN_W / 2 - 8, SCREEN_H - 60 + gunRecoil * 2, 6, 60);
+
+    // Muzzle flash when shooting
+    if (isShooting) {
+        ctx.fillStyle = '#ffff00'; // Yellow flash
+        ctx.beginPath();
+        ctx.arc(SCREEN_W / 2, SCREEN_H - 65, 15 + Math.random() * 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ff0000'; // Red inner flash
+        ctx.beginPath();
+        ctx.arc(SCREEN_W / 2, SCREEN_H - 65, 8 + Math.random() * 5, 0, Math.PI * 2);
+        ctx.fill();
     }
 }
 
-function updateUI() {
-    document.getElementById('hpUI').innerText = `HP: ${player.hp}/${player.maxHp} | Atk: ${player.atk} | Def: ${player.def}`;
-    document.getElementById('lvlUI').innerText = `Level: ${player.level}`;
-    document.getElementById('xpUI').innerText = `XP: ${player.xp}/${player.xpNeeded}`;
-    document.getElementById('floorUI').innerText = `Floor: ${floor}`;
-    
-    let logDiv = document.getElementById('log');
-    logDiv.innerHTML = '';
-    messages.forEach(m => {
-        let span = document.createElement('div');
-        span.className = `log-entry ${m.type}`;
-        span.innerText = m.text;
-        logDiv.appendChild(span);
-    });
+// Game Loop
+function gameLoop() {
+    movePlayer();
+    render();
+    requestAnimationFrame(gameLoop);
 }
 
-// --- INPUT ---
-function handleInput(e) {
-    if (['ArrowUp', 'w', 'W'].includes(e.key)) player.move(0, -1);
-    if (['ArrowDown', 's', 'S'].includes(e.key)) player.move(0, 1);
-    if (['ArrowLeft', 'a', 'A'].includes(e.key)) player.move(-1, 0);
-    if (['ArrowRight', 'd', 'D'].includes(e.key)) player.move(1, 0);
-}
-
-// --- INIT ---
-document.addEventListener('keydown', handleInput);
-logMsg("Welcome to the Abyss. Find the 🕳️ to descend.", "loot");
-generateMap();
-updateUI();
-draw();
+// Start the engine
+gameLoop();
 
 </script>
 </body>
