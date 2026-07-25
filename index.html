@@ -1,343 +1,346 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HTML5 Raycaster - Advanced Graphics</title>
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:site" content="@azazeln28">
+    <meta name="twitter:creator" content="@azazeln28">
+    <!-- Facebook Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://azazeln28.neocities.org/games/doom">
+    <meta property="og:title" content="DOOM">
+    <meta property="og:description" content="DOOM® is a registered trademark of ZeniMax Media Inc. in the US and/or other countries. Id Software® is a registered trademark of ZeniMax Media Inc. in the US and/or other countries. WebDOOM is in no way affiliated with ZeniMax Media Inc. or id Software LLC and is not approved by ZeniMax Media Inc. or id Software.">
+    <meta property="og:image" content="https://azazeln28.neocities.org/games/doom/cover.png">
+    <link href="https://fonts.googleapis.com/css?family=Teko&display=swap" rel="stylesheet">
+    <title>DOOM</title>
     <style>
-        body {
-            margin: 0;
-            background-color: #000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            overflow: hidden;
-            font-family: 'Courier New', Courier, monospace;
-        }
-        canvas {
-            width: 100vw;
-            height: 100vh;
-            object-fit: contain;
-            image-rendering: pixelated;
-        }
-        #ui {
-            position: absolute;
-            top: 15px;
-            left: 20px;
-            color: #ff3333;
-            font-size: 22px;
-            font-weight: bold;
-            pointer-events: none;
-            text-shadow: 2px 2px 0px #000;
-        }
-        #crosshair {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 10px;
-            height: 10px;
-            transform: translate(-50%, -50%);
-            pointer-events: none;
-        }
-        #crosshair::before, #crosshair::after {
-            content: '';
-            position: absolute;
-            background: rgba(255,255,255,0.6);
-        }
-        #crosshair::before { top: 4px; left: 0; width: 10px; height: 2px; }
-        #crosshair::after { top: 0; left: 4px; width: 2px; height: 10px; }
+      html, body {
+        font-family: 'Teko', sans-serif;
+        font-size: 200%;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: black;
+        color: white;
+      }
+
+      /* the canvas *must not* have any border or padding, or mouse coords will be wrong */
+      canvas { 
+        border: 0px none;
+        image-rendering: pixelated;
+        width: 160vh;
+        height: 100vh;
+      }
+
+      #container {
+        position: fixed;
+        display: flex;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        height: 100%;
+        justify-content: center;
+        align-items: center;
+      }
+
+      #spinner-container {
+        display: flex;
+        justify-content: center;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      #spinner {
+        height: 30px;
+        width: 30px;
+        margin: 0;
+        display: inline-block;
+
+        -webkit-animation: rotation .8s linear infinite;
+        -moz-animation: rotation .8s linear infinite;
+        -o-animation: rotation .8s linear infinite;
+        animation: rotation 0.8s linear infinite;
+
+        border-left: 5px solid transparent;
+        border-right: 5px solid transparent;
+        border-bottom: 5px solid transparent;
+        border-top: 5px solid hsl(0, 100%, 50%);
+        
+        border-radius: 100%;
+        background-color:transparent; 
+      }
+
+      #status {
+        display: inline-block;
+        vertical-align: top;
+        margin-top: 30px;
+        margin-left: 20px;
+        font-weight: bold;
+        color: hsl(0, 100%, 50%);
+      }
+
+      #progress {
+        height: 20px;
+        width: 300px;
+      }
+
+      progress::-moz-progress-bar,
+      progress::-webkit-progress-value { 
+        background: hsl(0, 100%, 50%);
+      }
+
+      progress {
+        color: hsl(0, 100%, 50%);
+      }
+
+      @-webkit-keyframes rotation {
+        from {-webkit-transform: rotate(0deg);}
+        to {-webkit-transform: rotate(360deg);}
+      }
+      @-moz-keyframes rotation {
+        from {-moz-transform: rotate(0deg);}
+        to {-moz-transform: rotate(360deg);}
+      }
+      @-o-keyframes rotation {
+        from {-o-transform: rotate(0deg);}
+        to {-o-transform: rotate(360deg);}
+      }
+      @keyframes rotation {
+        from {transform: rotate(0deg);}
+        to {transform: rotate(360deg);}
+      }
+
     </style>
-</head>
-<body>
+  </head>
+  <body>
+    <!-- Aquí antes estaba el logo de Emscripten -->
+    <div id="container">
+      <div id="spinner-container">
+        <div id="spinner"></div>
+        <div id="status">Downloading...</div>
+        <progress value="0" max="100" id="progress" hidden="1"></progress>
+      </div>
+    </div>
 
-    <div id="ui">WASD: Move | LEFT/RIGHT: Turn | SPACE: Fire Shotgun</div>
-    <div id="crosshair"></div>
-    <canvas id="screen" width="320" height="200"></canvas>
-
-<script>
-const canvas = document.getElementById('screen');
-const ctx = canvas.getContext('2d', { alpha: false });
-
-const SCREEN_W = canvas.width;
-const SCREEN_H = canvas.height;
-const TEX_SIZE = 64;
-const FOV = Math.PI / 3.0; 
-
-// --- PROCEDURAL TEXTURE GENERATION ---
-// 1. Wall Texture (Bricks)
-const wallCanvas = document.createElement('canvas');
-wallCanvas.width = TEX_SIZE; wallCanvas.height = TEX_SIZE;
-const wCtx = wallCanvas.getContext('2d');
-wCtx.fillStyle = '#5a2222'; wCtx.fillRect(0,0,TEX_SIZE,TEX_SIZE); // Base red
-wCtx.fillStyle = '#220000'; // Mortar lines
-for(let y=0; y<TEX_SIZE; y+=16) {
-    wCtx.fillRect(0, y, TEX_SIZE, 2);
-    let offset = (y/16)%2 === 0 ? 0 : 16;
-    for(let x=0; x<TEX_SIZE; x+=32) wCtx.fillRect(x + offset, y, 2, 16);
-}
-// Add noise/grit to walls
-for(let i=0; i<400; i++) {
-    wCtx.fillStyle = Math.random() > 0.5 ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.1)';
-    wCtx.fillRect(Math.random()*TEX_SIZE, Math.random()*TEX_SIZE, 2, 2);
-}
-
-// 2. Enemy Sprite (Pixel Art Array)
-const spriteCanvas = document.createElement('canvas');
-spriteCanvas.width = 16; spriteCanvas.height = 16;
-const sCtx = spriteCanvas.getContext('2d');
-const spriteArt = [
-    "......XXXX......",
-    "....XXRRRRXX....",
-    "...XRRRRRRRRX...",
-    "..XRRWWWWWWWWX..",
-    ".XRRW000WW000WX.",
-    ".XRRW0X0WW0X0WX.",
-    "XRRRWWWWWWWWWWRX",
-    "XRRRRRRRRRRRRRRX",
-    "XRRRRXXRRXXRRRRX",
-    "XRRRXYYYRRYYYRRX",
-    ".XRRXYYXXXXYYRX.",
-    ".XRRRXXXXXXXXRX.",
-    "..XRRRRRRRRRRX..",
-    "...XXRRRRRRXX...",
-    ".....XXXXXX.....",
-    "......X..X......"
-];
-const colors = {'X': '#111', 'R': '#d02020', 'W': '#eaeaea', '0': '#000', 'Y': '#d0a020', '.': null};
-for(let y=0; y<16; y++) {
-    for(let x=0; x<16; x++) {
-        let char = spriteArt[y][x];
-        if (colors[char]) {
-            sCtx.fillStyle = colors[char];
-            sCtx.fillRect(x, y, 1, 1);
-        }
-    }
-}
-
-// --- GAME STATE ---
-const zBuffer = new Float32Array(SCREEN_W);
-
-// 1 = Wall, 0 = Empty
-const mapWidth = 16;
-const mapHeight = 16;
-const map = [
-    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-    1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
-    1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,
-    1,0,0,1,1,0,1,0,0,1,0,1,1,1,0,1,
-    1,0,0,1,0,0,0,0,0,1,0,0,0,1,0,1,
-    1,0,0,1,0,0,0,0,0,1,1,1,0,1,0,1,
-    1,0,0,1,0,1,1,0,0,0,0,0,0,0,0,1,
-    1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
-    1,1,1,1,0,1,1,1,0,0,1,1,1,1,0,1,
-    1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1,
-    1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1,
-    1,0,1,1,1,1,1,0,1,1,1,0,1,1,1,1,
-    1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
-    1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,
-    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
-    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
-];
-
-const player = { x: 2.5, y: 2.5, dir: 0, moveSpeed: 0.05, rotSpeed: 0.04 };
-const enemies = [
-    { x: 8.5, y: 4.5, alive: true },
-    { x: 13.5, y: 2.5, alive: true },
-    { x: 2.5, y: 13.5, alive: true },
-    { x: 10.5, y: 13.5, alive: true },
-    { x: 8.5, y: 9.5, alive: true }
-];
-
-const keys = { w: false, a: false, s: false, d: false, ArrowLeft: false, ArrowRight: false };
-let isShooting = false;
-let gunRecoil = 0;
-
-// --- INPUT ---
-window.addEventListener('keydown', (e) => {
-    if (keys.hasOwnProperty(e.key)) keys[e.key] = true;
-    if (e.code === 'Space' && !isShooting && gunRecoil === 0) {
-        isShooting = true;
-        gunRecoil = 15;
-        
-        // Hitscan detection
-        for (let enemy of enemies) {
-            if (!enemy.alive) continue;
-            let dx = enemy.x - player.x, dy = enemy.y - player.y;
-            let dist = Math.sqrt(dx * dx + dy * dy);
-            let angleDiff = Math.atan2(dy, dx) - player.dir;
-            
-            while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-            while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-            
-            if (Math.abs(angleDiff) < 0.15 && dist < zBuffer[Math.floor(SCREEN_W / 2)]) {
-                enemy.alive = false; // Enemy killed!
-            }
-        }
-        setTimeout(() => isShooting = false, 100);
-    }
-});
-window.addEventListener('keyup', (e) => { if (keys.hasOwnProperty(e.key)) keys[e.key] = false; });
-
-function movePlayer() {
-    if (keys.a || keys.ArrowLeft) player.dir -= player.rotSpeed;
-    if (keys.d || keys.ArrowRight) player.dir += player.rotSpeed;
-
-    let dx = Math.cos(player.dir) * player.moveSpeed;
-    let dy = Math.sin(player.dir) * player.moveSpeed;
-
-    if (keys.w) {
-        if (map[Math.floor(player.y) * mapWidth + Math.floor(player.x + dx * 2)] === 0) player.x += dx;
-        if (map[Math.floor(player.y + dy * 2) * mapWidth + Math.floor(player.x)] === 0) player.y += dy;
-    }
-    if (keys.s) {
-        if (map[Math.floor(player.y) * mapWidth + Math.floor(player.x - dx * 2)] === 0) player.x -= dx;
-        if (map[Math.floor(player.y - dy * 2) * mapWidth + Math.floor(player.x)] === 0) player.y -= dy;
-    }
-}
-
-function render() {
-    // 1. Draw Gradient Sky and Floor
-    let skyGradient = ctx.createLinearGradient(0, 0, 0, SCREEN_H/2);
-    skyGradient.addColorStop(0, '#1a1a24');
-    skyGradient.addColorStop(1, '#3a3a4c');
-    ctx.fillStyle = skyGradient;
-    ctx.fillRect(0, 0, SCREEN_W, SCREEN_H / 2);
+    <!-- 
+    <span id="controls">
+      <span>
+        <input type="checkbox" id="resize">
+        Resize canvas
+      </span>
+      <span>
+        <input type="checkbox" id="pointerLock" checked>
+        Lock/hide mouse pointer &nbsp;&nbsp;&nbsp;
+      </span>
+      <span>
+        <input type="button" value="Fullscreen" onclick="Module.requestFullscreen(document.getElementById('pointerLock').checked, document.getElementById('resize').checked)">
+      </span>
+    </span>
+    -->
     
-    ctx.fillStyle = '#333333'; // Solid floor
-    ctx.fillRect(0, SCREEN_H / 2, SCREEN_W, SCREEN_H / 2);
+    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
+    
+    <script type="text/javascript">
+      const statusElement = document.getElementById('status');
+      const progressElement = document.getElementById('progress');
+      const spinnerElement = document.getElementById('spinner');
 
-    // 2. DDA Raycasting Engine (Math upgraded for perfect textures)
-    for (let x = 0; x < SCREEN_W; x++) {
-        let cameraX = 2 * x / SCREEN_W - 1; 
-        let rayDirX = Math.cos(player.dir) + Math.cos(player.dir + Math.PI/2) * cameraX * 0.66;
-        let rayDirY = Math.sin(player.dir) + Math.sin(player.dir + Math.PI/2) * cameraX * 0.66;
-        
-        let mapX = Math.floor(player.x), mapY = Math.floor(player.y);
-        let sideDistX, sideDistY;
-        let deltaDistX = Math.abs(1 / rayDirX), deltaDistY = Math.abs(1 / rayDirY);
-        let stepX, stepY, hit = 0, side;
+      document.addEventListener('G_SaveGame', (e) => {
+        console.log(e.detail)
+      })
 
-        if (rayDirX < 0) { stepX = -1; sideDistX = (player.x - mapX) * deltaDistX; }
-        else { stepX = 1; sideDistX = (mapX + 1.0 - player.x) * deltaDistX; }
-        if (rayDirY < 0) { stepY = -1; sideDistY = (player.y - mapY) * deltaDistY; }
-        else { stepY = 1; sideDistY = (mapY + 1.0 - player.y) * deltaDistY; }
+      var Module = {
+        preRun: [],
+        postRun: [],
+        onRuntimeInitialized: function() {
+          console.log('hola')
+          // Esto es una auténtica ñapaza
+          let frameID = undefined
 
-        while (hit === 0) {
-            if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; }
-            else { sideDistY += deltaDistY; mapY += stepY; side = 1; }
-            if (map[mapY * mapWidth + mapX] > 0) hit = 1;
-        }
+          const currentState = {
+            buttons: 0,
+            x: 0,
+            y: 0,
+            strafe: 0,
+            look: 0
+          }, previousState = {
+            buttons: 0,
+            x: 0,
+            y: 0,
+            strafe: 0,
+            look: 0
+          }
 
-        let perpWallDist = (side === 0) ? (sideDistX - deltaDistX) : (sideDistY - deltaDistY);
-        zBuffer[x] = perpWallDist;
+          function frame() {
 
-        let lineHeight = Math.floor(SCREEN_H / perpWallDist);
-        let drawStart = -lineHeight / 2 + SCREEN_H / 2;
-        let drawEnd = lineHeight / 2 + SCREEN_H / 2;
+            previousState.buttons = currentState.buttons            
+            previousState.x = currentState.x            
+            previousState.y = currentState.y            
+            previousState.strafe = currentState.strafe            
+            previousState.look = currentState.look           
 
-        // Calculate texture coordinate
-        let wallX;
-        if (side === 0) wallX = player.y + perpWallDist * rayDirY;
-        else wallX = player.x + perpWallDist * rayDirX;
-        wallX -= Math.floor(wallX);
+            currentState.buttons = 0
+            currentState.x = 0
+            currentState.y = 0
+            currentState.strafe = 0
+            currentState.look = 0
 
-        let texX = Math.floor(wallX * TEX_SIZE);
-        if (side === 0 && rayDirX > 0) texX = TEX_SIZE - texX - 1;
-        if (side === 1 && rayDirY < 0) texX = TEX_SIZE - texX - 1;
-
-        // Draw the vertical slice of the wall texture
-        if (drawStart < SCREEN_H && drawEnd > 0) {
-            ctx.drawImage(wallCanvas, texX, 0, 1, TEX_SIZE, x, drawStart, 1, lineHeight);
-        }
-
-        // Apply directional & depth shading
-        let depthShader = Math.min(1, perpWallDist / 12);
-        ctx.fillStyle = `rgba(0, 0, 0, ${depthShader + (side === 1 ? 0.3 : 0)})`; 
-        ctx.fillRect(x, drawStart, 1, lineHeight);
-    }
-
-    // 3. Render Sprites
-    enemies.forEach(e => { e.dist = Math.sqrt(Math.pow(e.x - player.x, 2) + Math.pow(e.y - player.y, 2)); });
-    enemies.sort((a, b) => b.dist - a.dist);
-
-    for (let enemy of enemies) {
-        if (!enemy.alive) continue;
-
-        let spriteX = enemy.x - player.x;
-        let spriteY = enemy.y - player.y;
-
-        // Transform sprite with the inverse camera matrix
-        let invDet = 1.0 / (Math.cos(player.dir + Math.PI/2)*0.66 * Math.sin(player.dir) - Math.cos(player.dir) * Math.sin(player.dir + Math.PI/2)*0.66);
-        let transformX = invDet * (Math.sin(player.dir) * spriteX - Math.cos(player.dir) * spriteY);
-        let transformY = invDet * (-Math.sin(player.dir + Math.PI/2)*0.66 * spriteX + Math.cos(player.dir + Math.PI/2)*0.66 * spriteY);
-        
-        let spriteScreenX = Math.floor((SCREEN_W / 2) * (1 + transformX / transformY));
-        let spriteHeight = Math.abs(Math.floor(SCREEN_H / transformY));
-        let spriteWidth = Math.abs(Math.floor(SCREEN_H / transformY));
-        
-        let drawStartY = Math.floor(-spriteHeight / 2 + SCREEN_H / 2);
-        let drawStartX = Math.floor(-spriteWidth / 2 + spriteScreenX);
-        let drawEndX = Math.floor(spriteWidth / 2 + spriteScreenX);
-
-        if (transformY > 0) {
-            for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
-                if (stripe > 0 && stripe < SCREEN_W && transformY < zBuffer[stripe]) {
-                    // Calculate which pixel of the 16x16 sprite array to draw
-                    let texX = Math.floor((stripe - drawStartX) * 16 / spriteWidth);
-                    ctx.drawImage(spriteCanvas, texX, 0, 1, 16, stripe, drawStartY, 1, spriteHeight);
-                    
-                    // Depth fog on enemies
-                    ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(0.8, transformY / 12)})`;
-                    ctx.fillRect(stripe, drawStartY, 1, spriteHeight);
+            const gamepads = navigator.getGamepads()
+            for (let index = 0; index < gamepads.length; index++) {
+              const gamepad = gamepads[index]
+              if (gamepad) {
+                const buttonLength = Math.min(20, gamepad.buttons.length)
+                for (let i = 0; i < buttonLength; i++) {
+                  const button = gamepad.buttons[i]
+                  if (button.pressed) {
+                    currentState.buttons |= (1 << i)
+                  }
                 }
+                
+                if (gamepad.axes[0] < -0.1
+                 || gamepad.axes[0] > 0.1) {
+                  currentState.strafe = gamepad.axes[0] < 0 ? -32767 : 32767
+                } else {
+                  currentState.strafe = 0
+                }
+
+                if (gamepad.axes[1] < -0.1
+                 || gamepad.axes[1] > 0.1) {
+                  currentState.y = gamepad.axes[1] < 0 ? -32767 : 32767
+                } else {
+                  currentState.y = 0
+                }
+
+                if (gamepad.axes[2] < -0.1 
+                 || gamepad.axes[2] > 0.1) {
+                  currentState.x = gamepad.axes[2] < 0 ? -32767 : 32767
+                } else {
+                  currentState.x = 0
+                }                
+              }
             }
+
+            Module._UpdateJoystick(currentState.buttons, currentState.x, currentState.y, currentState.strafe, currentState.look)
+
+            frameID = window.requestAnimationFrame(frame)
+          }
+
+          frameID = window.requestAnimationFrame(frame)
+        },
+        print: (function() {
+          const element = document.getElementById('output');
+          if (element) element.value = ''; // clear browser cache
+          return function(text) {
+            if (arguments.length > 1) {
+              text = Array.prototype.slice.call(arguments).join(' ');
+            }
+            // These replacements are necessary if you render to raw HTML
+            //text = text.replace(/&/g, "&amp;");
+            //text = text.replace(/</g, "&lt;");
+            //text = text.replace(/>/g, "&gt;");
+            //text = text.replace('\n', '<br>', 'g');
+            console.log(text);
+            if (element) {
+              element.value += text + "\n";
+              element.scrollTop = element.scrollHeight; // focus on bottom
+            }
+          };
+        })(),
+        printErr: function(text) {
+          if (arguments.length > 1) {
+            text = Array.prototype.slice.call(arguments).join(' ');
+          }
+          console.error(text);
+        },
+        canvas: (function() {
+          const canvas = document.getElementById('canvas');
+          // As a default initial behavior, pop up an alert when webgl context is lost. To make your
+          // application robust, you may want to override this behavior before shipping!
+          // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
+          canvas.addEventListener("webglcontextlost", function(e) { 
+            alert('WebGL context lost. You will need to reload the page.'); 
+            e.preventDefault(); 
+          }, false);
+          return canvas;
+        })(),
+        setStatus: function(text) {
+          if (!Module.setStatus.last) {
+            Module.setStatus.last = { time: Date.now(), text: '' };
+          }
+
+          if (text === Module.setStatus.last.text) {
+            return;
+          }
+
+          var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+          var now = Date.now();
+          if (m && now - Module.setStatus.last.time < 30) {
+            return; // if this is a progress update, skip it if too soon
+          }
+
+          Module.setStatus.last.time = now;
+          Module.setStatus.last.text = text;
+          
+          if (m) {
+            text = m[1];
+            progressElement.value = parseInt(m[2])*100;
+            progressElement.max = parseInt(m[4])*100;
+            progressElement.hidden = false;
+            spinnerElement.hidden = false;
+          } else {
+            progressElement.value = null;
+            progressElement.max = null;
+            progressElement.hidden = true;
+            if (!text) {
+              spinnerElement.style.display = 'none';
+            }
+          }
+          statusElement.innerHTML = text;
+        },
+        totalDependencies: 0,
+        monitorRunDependencies: function(left) {
+          this.totalDependencies = Math.max(this.totalDependencies, left);
+          Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
         }
-    }
+      };
 
-    // 4. Draw Double-Barrel Shotgun
-    if (gunRecoil > 0) gunRecoil -= 1;
-    let sway = Math.sin(Date.now() / 200) * (keys.w || keys.s ? 5 : 0);
-    let gunX = SCREEN_W / 2 - 25 + sway;
-    let gunY = SCREEN_H - 100 + gunRecoil * 2;
+      Module.setStatus('Downloading...');
 
-    // Barrels
-    ctx.fillStyle = '#2a2a2a'; // Left Barrel
-    ctx.fillRect(gunX, gunY, 20, 100);
-    ctx.fillStyle = '#111'; // Right Barrel
-    ctx.fillRect(gunX + 20, gunY, 20, 100);
-    
-    // Metallic Highlights
-    ctx.fillStyle = '#666'; 
-    ctx.fillRect(gunX + 4, gunY, 5, 100);
-    ctx.fillRect(gunX + 24, gunY, 5, 100);
-    
-    // Gun body/stock
-    ctx.fillStyle = '#5c3a21'; // Wood color
-    ctx.fillRect(gunX - 10, gunY + 70, 60, 40);
+      window.onblur = function() {
+        Module._SendPause(1)
+        Module.SDL2.audioContext.suspend()
+      }
 
-    // Muzzle Flash
-    if (isShooting) {
-        ctx.fillStyle = 'rgba(255, 200, 0, 0.8)';
-        ctx.beginPath();
-        ctx.arc(SCREEN_W / 2 + sway, gunY - 10, 25, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(255, 50, 0, 0.9)';
-        ctx.beginPath();
-        ctx.arc(SCREEN_W / 2 + sway, gunY - 10, 15, 0, Math.PI * 2);
-        ctx.fill();
-    }
-}
+      window.onfocus = function() {
+        Module._SendPause(0)
+        Module.SDL2.audioContext.resume()
+      }
 
-function gameLoop() {
-    movePlayer();
-    render();
-    requestAnimationFrame(gameLoop);
-}
+      window.onclick = function(e) {
+        if (Module.SDL2.audioContext.state !== 'running') {
+          Module.SDL2.audioContext.resume()
+        }
+      }
 
-// Start
-gameLoop();
-
-</script>
-</body>
+      window.onerror = function(event) {
+        // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
+        Module.setStatus('Exception thrown, see JavaScript console');
+        spinnerElement.style.display = 'none';
+        Module.setStatus = function(text) {
+          if (text) {
+            Module.printErr('[post-exception status] ' + text);
+          }
+        };
+      };
+    </script>
+    <script async type="text/javascript" src="index.js"></script>
+  </body>
 </html>
